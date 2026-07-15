@@ -95,7 +95,13 @@ function renderResult(data) {
         .map(
             (t) => `
       <div class="technique">
-        <p class="technique-name">${escapeHtml(t.name)}</p>
+        <p class="technique-name">
+          ${escapeHtml(t.name)}
+          ${t.category && t.category !== "Other"
+                    ? `<span class="technique-tag">${escapeHtml(t.category)}</span>`
+                    : ""
+                }
+        </p>
         <p class="technique-evidence">“${escapeHtml(t.evidence)}”</p>
         <p class="technique-explanation">${escapeHtml(t.explanation)}</p>
       </div>`

@@ -32,22 +32,61 @@ ALLOWED_IMAGE_TYPES = {
     "image/gif": "image/gif",
 }
 
-SYSTEM_PROMPT = """You are an expert in psychology, rhetoric, and social \
+# The core taxonomy the app recognizes. `category` on each detected technique
+# is constrained to these names (plus "Other"), and the definitions are given
+# to the model so it applies them consistently.
+MANIPULATION_TYPES = [
+    (
+        "Gaslighting",
+        "Making you doubt your own memory or sanity by denying events happened.",
+    ),
+    (
+        "Guilt-Tripping",
+        "Using your conscience and shame to force you to do what they want.",
+    ),
+    (
+        "Love-Bombing",
+        "Showering you with intense affection early on to gain trust quickly, "
+        "then using it to control you.",
+    ),
+    (
+        "Playing the Victim",
+        "Pretending to be the hurt or wronged person to avoid taking "
+        "responsibility for their own bad behavior.",
+    ),
+    (
+        "The Silent Treatment",
+        "Withholding communication to punish you and force you to give in.",
+    ),
+    (
+        "Projection",
+        "Accusing you of doing the exact bad things that they are doing.",
+    ),
+]
+
+# Allowed values for a technique's `category`.
+TECHNIQUE_CATEGORIES = [name for name, _ in MANIPULATION_TYPES] + ["Other"]
+
+_TYPES_BLOCK = "\n".join(f"- {name}: {desc}" for name, desc in MANIPULATION_TYPES)
+
+SYSTEM_PROMPT = f"""You are an expert in psychology, rhetoric, and social \
 engineering. You analyze text and screenshots (messages, ads, emails, social \
 posts, chats) to determine whether they contain manipulation.
 
 Manipulation is any attempt to influence someone's beliefs, emotions, or \
 behavior through deceptive, coercive, or unfair means rather than honest \
-persuasion. Consider techniques such as:
-- Emotional manipulation: guilt-tripping, fear-mongering, love-bombing, \
-  playing the victim
-- Gaslighting: denying reality, making someone doubt their memory or perception
-- Coercion & pressure: ultimatums, false urgency, artificial scarcity
-- Deception: lying, half-truths, misleading framing, cherry-picking
-- Social engineering / phishing: impersonation, pretexting, credential requests
-- Dark patterns: manipulative UI, hidden costs, forced continuity
-- Propaganda & rhetoric: loaded language, ad hominem, false dilemmas, \
-  bandwagon, appeal to authority
+persuasion.
+
+Pay special attention to these core manipulation types:
+{_TYPES_BLOCK}
+
+Also consider other tactics: fear-mongering, coercion, false urgency, \
+artificial scarcity, deception and misleading framing, social engineering / \
+phishing, dark patterns, and loaded propaganda rhetoric.
+
+For each technique you find, set its "category" to the matching core type from \
+the list above when it fits; use "Other" for anything outside that list. Put \
+the specific, descriptive label in "name".
 
 Be fair and precise. Ordinary honest persuasion, clear opinions, and normal \
 marketing are NOT manipulation on their own. Only flag genuine manipulative \
@@ -85,7 +124,15 @@ ANALYSIS_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "enum": TECHNIQUE_CATEGORIES,
+                        "description": "Which core manipulation type this is.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Specific descriptive label for the technique.",
+                    },
                     "evidence": {
                         "type": "string",
                         "description": "The specific phrase or element that shows it.",
@@ -95,7 +142,7 @@ ANALYSIS_SCHEMA = {
                         "description": "Why this is manipulative.",
                     },
                 },
-                "required": ["name", "evidence", "explanation"],
+                "required": ["category", "name", "evidence", "explanation"],
                 "additionalProperties": False,
             },
         },
@@ -228,7 +275,7 @@ def analyze_content(user_blocks):
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", manipulation_types=MANIPULATION_TYPES)
 
 
 @app.route("/analyze", methods=["POST"])

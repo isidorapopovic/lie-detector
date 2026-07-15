@@ -38,6 +38,18 @@
             </button>
         </form>
 
+        <details class="types-ref">
+            <summary>Types of manipulation we check for</summary>
+            <ul class="types-list">
+                {% for name, desc in manipulation_types %}
+                <li>
+                    <span class="type-name">{{ name }}</span>
+                    <span class="type-desc">{{ desc }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </details>
+
         <section id="status" class="status" hidden></section>
         <section id="result" class="result" hidden></section>
 
