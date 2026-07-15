@@ -1,8 +1,10 @@
 """Manipulation Detector — Flask backend.
 
-Analyzes uploaded text or screenshots with Claude and reports whether the
+Analyzes uploaded text or screenshots with an LLM and reports whether the
 content shows signs of manipulation, along with a 0-100 score, the specific
 techniques found, and a saved history of past analyses.
+
+Uses the OpenAI API (gpt-4o-mini — low cost, supports vision + JSON output).
 """
 
 import base64
@@ -11,16 +13,28 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-import anthropic
+import openai
+from openai import OpenAI
 from flask import Flask, g, jsonify, render_template, request
 
 app = Flask(__name__)
 
-# Claude resolves credentials from the environment automatically:
-# ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile.
-client = anthropic.Anthropic()
+# The OpenAI client reads OPENAI_API_KEY from the environment. It's created
+# lazily so a missing key surfaces as a clean error at request time rather
+# than crashing the server at startup.
+_client = None
 
-MODEL = "claude-opus-4-8"
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = OpenAI()
+    return _client
+
+
+# gpt-4o-mini is inexpensive and supports images + structured JSON output.
+# Swap to another model here if you like (e.g. "gpt-4.1-mini").
+MODEL = "gpt-4o-mini"
 DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
 
 # Supported image types for screenshot uploads.
@@ -240,24 +254,32 @@ def get_history(limit=25):
 
 
 # --------------------------------------------------------------------------- #
-# Claude call
+# LLM call
 # --------------------------------------------------------------------------- #
-def analyze_content(user_blocks):
-    """Send content blocks to Claude and return the parsed analysis dict."""
-    response = client.messages.create(
+def analyze_content(user_content):
+    """Send content to the model and return the parsed analysis dict."""
+    response = get_client().chat.completions.create(
         model=MODEL,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        thinking={"type": "adaptive"},
-        output_config={"format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA}},
-        messages=[{"role": "user", "content": user_blocks}],
+        max_tokens=2000,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "manipulation_analysis",
+                "strict": True,
+                "schema": ANALYSIS_SCHEMA,
+            },
+        },
     )
 
-    if response.stop_reason == "refusal":
+    message = response.choices[0].message
+    if getattr(message, "refusal", None):
         raise RuntimeError("The request was declined by the safety system.")
 
-    # With structured output, the JSON lives in the first text block.
-    text = next((b.text for b in response.content if b.type == "text"), None)
+    text = message.content
     if not text:
         raise RuntimeError("No analysis was returned.")
     result = json.loads(text)
@@ -286,7 +308,7 @@ def analyze():
     if not text and (image is None or image.filename == ""):
         return jsonify({"error": "Please provide text or an image to analyze."}), 400
 
-    blocks = []
+    content = []
     source = "text"
     preview = text[:200]
 
@@ -295,10 +317,10 @@ def analyze():
         if media_type is None:
             return jsonify({"error": "Unsupported image type. Use PNG, JPEG, WEBP, or GIF."}), 400
         data = base64.standard_b64encode(image.read()).decode("utf-8")
-        blocks.append(
+        content.append(
             {
-                "type": "image",
-                "source": {"type": "base64", "media_type": media_type, "data": data},
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
             }
         )
         source = "text+image" if text else "image"
@@ -309,12 +331,12 @@ def analyze():
         if not text
         else "Analyze the following content for manipulation:\n\n" + text
     )
-    blocks.append({"type": "text", "text": instruction})
+    content.append({"type": "text", "text": instruction})
 
     try:
-        result = analyze_content(blocks)
-    except anthropic.APIError as exc:
-        app.logger.exception("Claude API error")
+        result = analyze_content(content)
+    except openai.APIError as exc:
+        app.logger.exception("OpenAI API error")
         return jsonify({"error": f"Analysis service error: {exc}"}), 502
     except (RuntimeError, ValueError) as exc:
         app.logger.exception("Analysis failed")
@@ -325,7 +347,7 @@ def analyze():
             jsonify(
                 {
                     "error": "The analysis service is not configured correctly. "
-                    "Make sure Claude credentials (ANTHROPIC_API_KEY) are set."
+                    "Make sure the OPENAI_API_KEY is set."
                 }
             ),
             502,
