@@ -1,55 +1,61 @@
 <!doctype html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Manipulation Detector</title>
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='style.css') }}"
-    />
-  </head>
-  <body>
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
     <header class="site-header">
-      <h1>Manipulation Detector</h1>
-      <p class="tagline">
-        Paste a message or upload a screenshot. An AI checks it for signs of
-        manipulation and explains why.
-      </p>
+        <h1>Manipulation Detector</h1>
+        <p class="tagline">
+            Paste a message or upload a screenshot. An AI checks it for signs of
+            manipulation and explains why.
+        </p>
     </header>
 
     <main class="container">
-      <form id="analyze-form">
-        <label class="field-label" for="text-input">Text</label>
-        <textarea
-          id="text-input"
-          name="text"
-          rows="6"
-          placeholder="Paste a message, email, ad, or chat here…"
-        ></textarea>
+        <form id="analyze-form">
+            <label class="field-label" for="text-input">Text</label>
+            <textarea id="text-input"
+                      name="text"
+                      rows="6"
+                      placeholder="Paste a message, email, ad, or chat here…"></textarea>
 
-        <div class="divider"><span>and / or</span></div>
+            <div class="divider"><span>and / or</span></div>
 
-        <label class="field-label" for="image-input">Screenshot</label>
-        <div id="drop-zone" class="drop-zone">
-          <input id="image-input" name="image" type="file" accept="image/*" />
-          <p class="drop-hint">Click to choose an image, or drag one here</p>
-          <img id="preview" class="preview" alt="" hidden />
-        </div>
+            <label class="field-label" for="image-input">Screenshot</label>
+            <div id="drop-zone" class="drop-zone">
+                <input id="image-input" name="image" type="file" accept="image/*" />
+                <p class="drop-hint">Click to choose an image, or drag one here</p>
+                <img id="preview" class="preview" alt="" hidden />
+            </div>
 
-        <button id="submit-btn" type="submit" class="analyze-btn">
-          Analyze
-        </button>
-      </form>
+            <button id="submit-btn" type="submit" class="analyze-btn">
+                Analyze
+            </button>
+        </form>
 
-      <section id="status" class="status" hidden></section>
-      <section id="result" class="result" hidden></section>
+        <section id="status" class="status" hidden></section>
+        <section id="result" class="result" hidden></section>
+
+        <section id="history-section" class="history-section" hidden>
+            <div class="history-head">
+                <h2 class="history-title">History</h2>
+                <button id="clear-history" type="button" class="clear-btn">
+                    Clear
+                </button>
+            </div>
+            <div id="history-list" class="history-list"></div>
+        </section>
     </main>
 
     <footer class="site-footer">
-      <p>Results are AI-generated judgments, not certainties. Use your own.</p>
+        <p>Results are AI-generated judgments, not certainties. Use your own.</p>
     </footer>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
-  </body>
+</body>
 </html>

@@ -1,15 +1,18 @@
 """Manipulation Detector — Flask backend.
 
 Analyzes uploaded text or screenshots with Claude and reports whether the
-content shows signs of manipulation, along with the specific techniques found.
+content shows signs of manipulation, along with a 0-100 score, the specific
+techniques found, and a saved history of past analyses.
 """
 
 import base64
 import json
 import os
+import sqlite3
+from datetime import datetime, timezone
 
 import anthropic
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 
 app = Flask(__name__)
 
@@ -18,6 +21,7 @@ app = Flask(__name__)
 client = anthropic.Anthropic()
 
 MODEL = "claude-opus-4-8"
+DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
 
 # Supported image types for screenshot uploads.
 ALLOWED_IMAGE_TYPES = {
@@ -49,7 +53,10 @@ Be fair and precise. Ordinary honest persuasion, clear opinions, and normal \
 marketing are NOT manipulation on their own. Only flag genuine manipulative \
 intent or technique. When uncertain, say so and lower your confidence.
 
-Base your judgment strictly on the content provided."""
+Score the content from 0 to 100 for overall manipulation intensity: 0 means \
+completely straightforward and honest, 25 mild pressure, 50 clearly \
+manipulative, 75 strongly manipulative, 100 severe or dangerous (e.g. scams, \
+coercion, abuse). Base your judgment strictly on the content provided."""
 
 # Structured output schema so the frontend always receives clean, typed JSON.
 ANALYSIS_SCHEMA = {
@@ -58,6 +65,10 @@ ANALYSIS_SCHEMA = {
         "is_manipulation": {
             "type": "boolean",
             "description": "True if the content shows manipulation.",
+        },
+        "manipulation_score": {
+            "type": "integer",
+            "description": "Overall manipulation intensity from 0 to 100.",
         },
         "confidence": {
             "type": "string",
@@ -95,6 +106,7 @@ ANALYSIS_SCHEMA = {
     },
     "required": [
         "is_manipulation",
+        "manipulation_score",
         "confidence",
         "summary",
         "techniques",
@@ -104,6 +116,85 @@ ANALYSIS_SCHEMA = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# History storage (SQLite)
+# --------------------------------------------------------------------------- #
+def get_db():
+    """Return a per-request SQLite connection."""
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(_exc):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                preview TEXT NOT NULL,
+                is_manipulation INTEGER NOT NULL,
+                score INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )
+            """
+        )
+
+
+def save_analysis(source, preview, result):
+    db = get_db()
+    db.execute(
+        "INSERT INTO analyses "
+        "(created_at, source, preview, is_manipulation, score, summary, result_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            source,
+            preview,
+            1 if result["is_manipulation"] else 0,
+            result["manipulation_score"],
+            result["summary"],
+            json.dumps(result),
+        ),
+    )
+    db.commit()
+
+
+def get_history(limit=25):
+    rows = get_db().execute(
+        "SELECT id, created_at, source, preview, is_manipulation, score, summary, "
+        "result_json FROM analyses ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "created_at": r["created_at"],
+            "source": r["source"],
+            "preview": r["preview"],
+            "is_manipulation": bool(r["is_manipulation"]),
+            "score": r["score"],
+            "summary": r["summary"],
+            "result": json.loads(r["result_json"]),
+        }
+        for r in rows
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Claude call
+# --------------------------------------------------------------------------- #
 def analyze_content(user_blocks):
     """Send content blocks to Claude and return the parsed analysis dict."""
     response = client.messages.create(
@@ -122,9 +213,19 @@ def analyze_content(user_blocks):
     text = next((b.text for b in response.content if b.type == "text"), None)
     if not text:
         raise RuntimeError("No analysis was returned.")
-    return json.loads(text)
+    result = json.loads(text)
+
+    # Clamp the score defensively — the schema can't enforce a numeric range.
+    try:
+        result["manipulation_score"] = max(0, min(100, int(result["manipulation_score"])))
+    except (KeyError, TypeError, ValueError):
+        result["manipulation_score"] = 0
+    return result
 
 
+# --------------------------------------------------------------------------- #
+# Routes
+# --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -139,6 +240,8 @@ def analyze():
         return jsonify({"error": "Please provide text or an image to analyze."}), 400
 
     blocks = []
+    source = "text"
+    preview = text[:200]
 
     if image is not None and image.filename != "":
         media_type = ALLOWED_IMAGE_TYPES.get((image.mimetype or "").lower())
@@ -151,6 +254,8 @@ def analyze():
                 "source": {"type": "base64", "media_type": media_type, "data": data},
             }
         )
+        source = "text+image" if text else "image"
+        preview = text[:200] if text else f"[screenshot: {image.filename}]"
 
     instruction = (
         "Analyze the following content for manipulation."
@@ -179,7 +284,24 @@ def analyze():
             502,
         )
 
+    save_analysis(source, preview, result)
     return jsonify(result)
+
+
+@app.route("/history", methods=["GET"])
+def history():
+    return jsonify(get_history())
+
+
+@app.route("/history", methods=["DELETE"])
+def clear_history():
+    db = get_db()
+    db.execute("DELETE FROM analyses")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+init_db()
 
 
 if __name__ == "__main__":
